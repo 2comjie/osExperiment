@@ -1,14 +1,18 @@
 #include <stdio.h>
 #include <fstream>
 #include <iostream>
-#include <set>
 #include <sstream>
 #include <string>
+#include <set>
+#include <deque>
 #include <vector>
 #define JOBFCFS 1
 #define JOBSJF 2
 #define JOBHRRN 3
-
+#define PROCHPF 1
+#define PROCSRT 2
+#define PROCRR 3
+#define TIME_SPLICE 4 // 时间片长度
 #pragma region 结构体变量声明
 // 作业
 struct JOB
@@ -38,14 +42,16 @@ struct JOB
 // 进程结构体
 struct PROC
 {
-    int p_id;     // 进程标识
-    int cpu_time; // 已经运行的时间
-    JOB *job;     // 对应的作业
+    int p_id;        // 进程标识
+    int cpu_time;    // 已经运行的时间
+    JOB *job;        // 对应的作业
+    int time_splice; // 时间片
 
-    PROC(JOB *job, int p_id)
+    PROC(JOB *job, int p_id, int time_splice)
     {
         this->job = job;
         this->p_id = p_id;
+        this->time_splice = time_splice;
         this->cpu_time = 0;
     }
 };
@@ -56,14 +62,15 @@ struct CPU
     CPU() { this->proc = nullptr; }
 };
 
-int N = 0;                           // N道处理系统
-int curtime = 0;                     // 当前系统运行时间
-std::set<JOB *> total_jobset;        // 总的作业集合
-std::set<JOB *> wait_schdule_jobset; // 当前时间正在等待被调度的作业
-std::set<PROC *> ready_procset;      // 当前内存中的就绪的进程集合
-int finish_jobs = 0;                 // 当前已经完成的任务数
-CPU *cpu = new CPU();                // 当前CPU
+int N = 0;                              // N道处理系统
+int curtime = 0;                        // 当前系统运行时间
+std::set<JOB *> total_jobset;           // 总的作业集合
+std::set<JOB *> wait_schdule_jobset;    // 当前时间正在等待被调度的作业
+std::deque<PROC *> ready_process_queue; // 当前内存中的就绪的进程集合
+int finish_jobs = 0;                    // 当前已经完成的任务数
+CPU *cpu = new CPU();                   // 当前CPU
 int job_schdule_type = 0;
+int proc_schdule_type = 0;
 
 int calue_turnaround_time(JOB *JOB)
 {
@@ -88,7 +95,7 @@ void job_sub()
 
 int total_proc()
 {
-    return cpu->proc == nullptr ? ready_procset.size() : ready_procset.size() + 1;
+    return cpu->proc == nullptr ? ready_process_queue.size() : ready_process_queue.size() + 1;
 }
 #pragma endregion
 
@@ -166,7 +173,7 @@ void job_schdule()
         }
         job->enter_mem_time = curtime;
         wait_schdule_jobset.erase(job);
-        ready_procset.insert(new PROC(job, job->j_id));
+        ready_process_queue.push_back(new PROC(job, job->j_id, TIME_SPLICE));
     }
 }
 #pragma endregion
@@ -175,7 +182,59 @@ void job_schdule()
 // 优先级调度
 PROC *PROC_HPF()
 {
-    int max = 0;
+    PROC *proc = cpu->proc;
+    auto it = ready_process_queue.begin();
+    while (it != ready_process_queue.end())
+    {
+        if (proc == nullptr || (*it)->job->proty > proc->job->proty)
+            proc = *it;
+        it++;
+    }
+    return proc;
+}
+
+// 最短剩余时间优先
+PROC *PROC_SRT()
+{
+    PROC *proc = cpu->proc;
+    auto it = ready_process_queue.begin();
+    while (it != ready_process_queue.end())
+    {
+        if (proc == nullptr)
+        {
+            proc = *it;
+            continue;
+        }
+        int t1 = (*it)->job->run_time - (*it)->cpu_time;
+        int t2 = proc->job->run_time - proc->cpu_time;
+        if (t1 < t2)
+            proc = *it;
+        it++;
+    }
+    return proc;
+}
+
+// 时间片轮转
+PROC *PROC_RR()
+{
+    if (ready_process_queue.empty())
+        return cpu->proc;
+    PROC *proc = cpu->proc;
+    if (proc == nullptr)
+    {
+        proc = ready_process_queue.front();
+        proc->time_splice = TIME_SPLICE;
+    }
+    else if (proc->time_splice <= 0)
+    {
+        proc = ready_process_queue.front();
+        proc->time_splice = TIME_SPLICE;
+    }
+    else
+    {
+    }
+
+    return proc;
 }
 
 void proc_schdule()
@@ -193,22 +252,30 @@ void proc_schdule()
         }
     }
 
-    if (cpu->proc == nullptr)
+    PROC *proc;
+    if (proc_schdule_type == PROCHPF)
+        proc = PROC_HPF();
+    else if (proc_schdule_type == PROCSRT)
+        proc = PROC_SRT();
+    else if (proc_schdule_type == PROCRR)
+        proc = PROC_RR();
+    else
     {
-        int min = 0xffff;
-        PROC *proc = nullptr;
-        for (auto it = ready_procset.begin(); it != ready_procset.end(); it++)
-            if (min > (*it)->job->enter_mem_time)
-            {
-                min = (*it)->job->enter_mem_time;
-                proc = *it;
-            }
-        {
-            ready_procset.erase(proc);
-            cpu->proc = proc;
-            if (proc->job->start_time == -1)
-                proc->job->start_time = curtime;
-        }
+        printf("proc_schdule() \n");
+        exit(1);
+    }
+
+    if (proc != nullptr)
+    {
+        if (cpu->proc != nullptr)
+            ready_process_queue.push_back(cpu->proc);
+        cpu->proc = proc;
+        auto it = ready_process_queue.begin();
+        while (it != ready_process_queue.end() && (*it) != proc)
+            it++;
+        ready_process_queue.erase(it);
+        if (proc->job->start_time == -1)
+            proc->job->start_time = curtime;
     }
 }
 #pragma endregion
@@ -225,7 +292,10 @@ void update()
         // 进程调度
         proc_schdule();
         if (cpu->proc != nullptr)
+        {
             cpu->proc->cpu_time++;
+            cpu->proc->time_splice--;
+        }
         curtime++;
     }
 }
@@ -288,6 +358,9 @@ int main()
     std::cout << "请输入作业调度算法类型" << std::endl;
     std::cout << "1.FCFS 2.SJF 3.HRRN" << std::endl;
     std::cin >> job_schdule_type;
+    std::cout << "请输入进程调度算法类型" << std::endl;
+    std::cout << "1.HPF 2.SRT 3.RR" << std::endl;
+    std::cin >> proc_schdule_type;
     std::cout << "请输入N道批处理系统: ";
     std::cin >> N;
     init();
